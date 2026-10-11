@@ -13,6 +13,19 @@ built and run entirely on your own machine as a simulation.
 > catches the technique it demonstrates. No real spacecraft, no real
 > infrastructure, nothing leaves your machine.
 
+> **Credit where due — the technique is not ours.** Component Collusion
+> (SPARTA DE-0012) was invented and registered in the SPARTA matrix by the
+> authors of **"SpyChain: Multi-Vector Supply Chain Attacks on Small
+> Satellite Systems"** (Vanlyssel, Sobrados, Anwar, Roman, Anwar —
+> [arXiv:2510.06535](https://arxiv.org/abs/2510.06535)). This lab is an
+> **open, reproducible implementation and hardening** of their Scenario 5,
+> with these deltas: cryptographic fragment recombination (XOR halves)
+> instead of plain command strings, a true geofence + epoch gate trigger,
+> bounded exfil with reset-to-dormant, a standalone blue-team detector,
+> and a workshop format. SpyChain deliberately published no exploit code;
+> this lab is simulation-scoped (open-source target, localhost only) and
+> detection-first. If you use this lab, cite SpyChain.
+
 ## The technique in one paragraph
 
 Two individually-benign "COTS catalog" apps ship with the flight software.
@@ -80,6 +93,8 @@ plus `cFS/` (NASA cFS clone with our apps overlaid).
 
 ## Credits & licensing
 
+- **SpyChain (arXiv:2510.06535)** — origin of the DE-0012 Component Collusion
+  technique reproduced here. Read the paper; cite it.
 - NASA cFS and its components: Apache-2.0 / NASA open-source agreements —
   see `cFS/` after setup. This lab only adds two apps and configuration.
 - Lab code and docs: Apache-2.0 (this repository).
