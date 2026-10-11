@@ -1,0 +1,23 @@
+# build artifacts
+build-*/
+cFS/build-*/
+
+# python
+.venv/
+__pycache__/
+*.pyc
+
+# runtime artifacts
+logs/
+clips/
+exfil_received.jsonl
+cFS/build-native_std/exe/cpu1/cf/de0012/
+ram/
+cf/
+ephem/
+
+# cFS clone (setup.sh fetches it; nothing from it is committed)
+cFS/
+
+# local-only notes not for attendees
+HANDOFF.md
