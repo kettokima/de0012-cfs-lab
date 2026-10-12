@@ -51,8 +51,8 @@ def main():
     ap.add_argument("--attack", action="store_true",
                     help="send only the in-fence coordinate (immediate trigger)")
     ap.add_argument("--approach", action="store_true",
-                    help="hold OUTSIDE the fence forever (for recording dormant phase); "
-                         "Ctrl-C / kill to end, or send SIGUSR1 to fire the pass")
+                    help="hold OUTSIDE the fence (dormant). USR1 = enter pass, "
+                         "USR2 = leave/re-arm. Repeatable.")
     args = ap.parse_args()
 
     os.makedirs(os.path.dirname(SOCK), exist_ok=True)
@@ -63,6 +63,13 @@ def main():
     except FileNotFoundError:
         pass
     s.bind(src)
+
+    # Recording state machine (installed FIRST, before any walking):
+    #   USR1 = start the pass (feed in-fence coordinates)
+    #   USR2 = end the pass (back outside fence; satellite re-arms)
+    state = {"inside": False}
+    signal.signal(signal.SIGUSR1, lambda sig, frm: state.update(inside=True))
+    signal.signal(signal.SIGUSR2, lambda sig, frm: state.update(inside=False))
 
     def send(lat, lon):
         msg = rmc(lat, lon)
@@ -80,17 +87,10 @@ def main():
         for lat, lon in [(10.0, 40.0), (50.0, 20.0), (70.0, 10.0), (78.23, 10.39)]:
             send(lat, lon)
             time.sleep(args.hold)
-        fired = {"v": False}
-        def on_usr1(sig, frm):
-            fired["v"] = True
-        signal.signal(signal.SIGUSR1, on_usr1)
-        print("[gnss_sim] holding OUTSIDE fence (dormant). kill -USR1 <pid> to start the pass", flush=True)
-        while not fired["v"]:
-            send(78.23, 10.39)   # same latitude band, outside lon fence
-            time.sleep(2)
-        print("[gnss_sim] pass starting - entering fence", flush=True)
+        print("[gnss_sim] holding OUTSIDE fence (dormant). "
+              "kill -USR1 <pid> = enter pass, kill -USR2 <pid> = leave/re-arm", flush=True)
         while True:
-            send(78.23, 15.39)
+            send(78.23, 15.39 if state["inside"] else 10.39)
             time.sleep(2)
 
     # default: full walk into fence then hold

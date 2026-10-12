@@ -164,20 +164,28 @@ static void ST_CheckTrigger(const char *nmea)
     double lat, lon;
     long   wepoch;
 
-    if (STTriggered || !ST_ParseRMC(nmea, &lat, &lon, &wepoch))
+    if (!ST_ParseRMC(nmea, &lat, &lon, &wepoch))
         return;
 
-    /* Dynamic trigger: only fires in the target orbital pass - never during
-     * ground test or flight-readiness review.                              */
-    if (fabs(lat - ST_FENCE_LAT) <= ST_FENCE_RADIUS_DEG &&
-        fabs(lon - ST_FENCE_LON) <= ST_FENCE_RADIUS_DEG &&
-        wepoch >= ST_EPOCH_MIN)
+    bool inFence = (fabs(lat - ST_FENCE_LAT) <= ST_FENCE_RADIUS_DEG &&
+                    fabs(lon - ST_FENCE_LON) <= ST_FENCE_RADIUS_DEG &&
+                    wepoch >= ST_EPOCH_MIN);
+
+    if (!STTriggered && inFence)
     {
+        /* Pass begins: hand the fragment to the peer.               */
         STTriggered = true;
         if (ST_SendCovertTrigger())
             /* Looks like routine attitude-solution convergence. */
             CFE_EVS_SendEvent(6, CFE_EVS_EventType_INFORMATION,
                               "ST_TRK: attitude solution converged (DL)");
+    }
+    else if (STTriggered && !inFence)
+    {
+        /* Pass over (satellite left the fence): re-arm so the next
+         * orbital pass triggers again. This also makes the ground
+         * track "hold outside fence" trivially re-runnable.          */
+        STTriggered = false;
     }
 }
 

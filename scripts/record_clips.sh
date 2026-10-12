@@ -18,6 +18,12 @@
 #   4  VI     Exfil burst: attacker pane fills, ground pane stays green
 #   5  IX     Reset: cycle complete, back to dormant, residue remains
 #   6  DET    Detection: static scan finds FIFO, dynamic flags sockets
+#
+# Manual control during recording (gnss_sim --approach):
+#   kill -USR1 $(pgrep -f 'gnss_sim.py --approach')   # satellite ENTERS fence
+#   kill -USR2 $(pgrep -f 'gnss_sim.py --approach')   # satellite LEAVES fence (re-arm)
+# Each USR1/USR2 cycle = one orbital pass = one full trigger->exfil->reset.
+# Repeatable: flubbed a take? USR2 to reset, USR1 to go again.
 set -euo pipefail
 
 LAB="$(cd "$(dirname "$0")" && pwd)"
@@ -37,19 +43,25 @@ stop_all() {
   sleep 1
 }
 
-boot_cfs() {   # starts cFS + exfil rx + dashboard, waits for OPERATIONAL
-  mkdir -p "$EXE/cf/de0012"
-  (cd "$LAB" && (setsid python3 exfil_rx.py > /tmp/rc_rx.log 2>&1 < /dev/null &))
-  (cd "$LAB" && (setsid "$LAB/.venv/bin/python" dashboard.py --logdir "$(ls -t "$LAB/logs" | head -n1 | sed "s|^|$LAB/logs/|")" > /tmp/rc_dash.log 2>&1 < /dev/null &)) || true
-  (cd "$EXE" && (setsid stdbuf -oL ./core-cpu1 -C PO_BSP_SLEEP_USEC=1000 > /tmp/rc_cfs.log 2>&1 < /dev/null &))
+boot_cfs() {   # starts cFS + exfil rx + dashboard on a FRESH session logdir
+  SESSLOG="$LAB/logs/recording_$(date +%Y%m%d_%H%M%S)"
+  mkdir -p "$SESSLOG"
+  rm -f "$LAB/exfil_received.jsonl"     # clean exfil view for the recording
+  (cd "$LAB" && (setsid python3 exfil_rx.py > "$SESSLOG/exfil_rx.log" 2>&1 < /dev/null &))
+  (cd "$LAB" && (setsid "$LAB/.venv/bin/python" dashboard.py --logdir "$SESSLOG" > "$SESSLOG/dashboard.log" 2>&1 < /dev/null &))
+  (cd "$EXE" && (setsid stdbuf -oL ./core-cpu1 -C PO_BSP_SLEEP_USEC=1000 > "$SESSLOG/cfs_console.log" 2>&1 < /dev/null &))
+  echo "$SESSLOG" > /tmp/rc_session_logdir
   note "waiting for cFS OPERATIONAL..."
   for i in $(seq 1 30); do
-    grep -q "entering OPERATIONAL state" /tmp/rc_cfs.log 2>/dev/null && break
+    grep -q "entering OPERATIONAL state" "$SESSLOG/cfs_console.log" 2>/dev/null && break
     sleep 1
   done
   sleep 2
-  note "cFS up: $(grep -c 'EVS Port1' /tmp/rc_cfs.log) events so far"
+  note "cFS up: $(grep -c 'EVS Port1' "$SESSLOG/cfs_console.log") events so far"
+  note "session logdir: $SESSLOG"
 }
+
+session_log() { cat /tmp/rc_session_logdir 2>/dev/null || echo "$LAB/logs/recording_latest"; }
 
 want() { [ "$RUN_ONLY" = "all" ] || [ "$RUN_ONLY" = "$1" ]; }
 
@@ -62,7 +74,6 @@ banner "CLIP 1 (I-II): BOOT + DORMANT — record ~20s"
 note "SHOW: terminal with cFS boot; dashboard :8051 ground pane (green, benign events)"
 note "SAY: two COTS catalog apps load like any other - review passed, telemetry plausible"
 [ "$DRYRUN" = 1 ] && exit 0
-rm -f /tmp/rc_cfs.log /tmp/rc_rx.log
 boot_cfs
 note "HOLD ~15s: benign HK events, no-op commands, dashboard DORMANT phase"
 sleep 15
@@ -76,11 +87,9 @@ banner "CLIP 2 (III): SVALBARD APPROACH — record ~20s"
 note "SHOW: gnss_sim --approach terminal (walking north) + cFS log (silent)"
 note "SAY: GNSS parse is local-only; the SB sees nothing at all"
 [ "$DRYRUN" = 1 ] && exit 0
-rm -f /tmp/rc_cfs.log /tmp/rc_rx.log
 boot_cfs
-(cd "$LAB" && (setsid python3 gnss_sim.py --approach > /tmp/rc_gnss.log 2>&1 < /dev/null &))
+(cd "$LAB" && (setsid python3 gnss_sim.py --approach > "$(session_log)/gnss_sim.log" 2>&1 < /dev/null &))
 sleep 6
-GNSS_PID=$(pgrep -f 'gnss_sim.py --approach' | head -n1)
 note "HOLD ~10s: satellite approaching, ground pane stays green, phase=DORMANT"
 sleep 10
 note "clip 2 timeline done — stop recording (leave everything running for clip 3)"
@@ -95,9 +104,8 @@ note "SAY: fence entry writes one fragment byte to a hidden FIFO - not the Softw
 GNSS_PID=$(pgrep -f 'gnss_sim.py --approach' | head -n1)
 if [ -z "${GNSS_PID:-}" ]; then
   note "approach sim not running (clip 3 run standalone) - booting fresh"
-  rm -f /tmp/rc_cfs.log /tmp/rc_rx.log
   boot_cfs
-  (cd "$LAB" && (setsid python3 gnss_sim.py --approach > /tmp/rc_gnss.log 2>&1 < /dev/null &))
+  (cd "$LAB" && (setsid python3 gnss_sim.py --approach > "$(session_log)/gnss_sim.log" 2>&1 < /dev/null &))
   sleep 8
   GNSS_PID=$(pgrep -f 'gnss_sim.py --approach' | head -n1)
 fi
@@ -123,12 +131,14 @@ if want 5; then
 banner "CLIP 5 (IX): RESET — record ~10s"
 note "SHOW: cFS log line 'calibration cycle complete' + dashboard phase back to DORMANT"
 [ "$DRYRUN" = 1 ] && exit 0
+CLOG="$(session_log)/cfs_console.log"
 note "waiting for cycle-complete event"
 for i in $(seq 1 20); do
-  grep -q "calibration cycle complete" /tmp/rc_cfs.log 2>/dev/null && break
+  grep -q "calibration cycle complete" "$CLOG" 2>/dev/null && break
   sleep 1
 done
 sleep 4
+note "BONUS if you want it: USR2 (leave fence) then USR1 again = next pass re-triggers"
 note "clip 5 timeline done — stop recording"
 stop_all
 fi
@@ -139,9 +149,8 @@ banner "CLIP 6 (DET): DETECTION — record ~30s"
 note "SHOW: static scan (finds FIFO), then dynamic scan (flags sockets)"
 note "SAY: SB monitoring saw nothing; OS-level artifacts tell the whole story"
 [ "$DRYRUN" = 1 ] && exit 0
-rm -f /tmp/rc_cfs.log /tmp/rc_rx.log
 boot_cfs
-(cd "$LAB" && (setsid python3 gnss_sim.py --attack > /tmp/rc_gnss.log 2>&1 < /dev/null &))
+(cd "$LAB" && (setsid python3 gnss_sim.py --attack > "$(session_log)/gnss_sim.log" 2>&1 < /dev/null &))
 sleep 6
 CFS_PID=$(pgrep -f core-cpu1 | head -n1)
 echo
